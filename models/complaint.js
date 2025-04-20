@@ -11,4 +11,4 @@ const complaintSchema = new mongoose.Schema({
   filePath: { type: String, required: false },
 }, { timestamps: true });
 
-module.exports = mongoose.model('Complaint', complaintSchema);
+module.exports = mongoose.model('complaint', complaintSchema);

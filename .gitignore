@@ -1,0 +1,16 @@
+# Node modules
+node_modules/
+
+# Environment variables
+.env
+
+# Logs
+logs/
+*.log
+
+# OS junk
+.DS_Store
+
+# Optional: build folders if you have
+dist/
+build/
