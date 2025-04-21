@@ -29,7 +29,8 @@ exports.login = async (req, res) => {
 
 exports.register = async (req, res) => {
   try {
-    const { email, password } = req.body;
+    const { name, department, email, password } = req.body;
+
     const existingUser = await User.findOne({ email });
 
     if (existingUser) {
@@ -39,6 +40,8 @@ exports.register = async (req, res) => {
     const hashedPassword = await bcrypt.hash(password, 10);
 
     const newUser = new User({
+      name,
+      department,
       email,
       password: hashedPassword,
     });
