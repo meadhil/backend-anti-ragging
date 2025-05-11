@@ -37,7 +37,7 @@ const scanFile = async (req, res, next) => {
       return res.status(400).json({ error: 'File contains suspicious patterns. Upload rejected.' });
     }
 
-    // Step 2: VirusTotal Scan
+    // Step 2: Scan
     const response = await axios.get(`https://www.virustotal.com/api/v3/files/${fileHash}`, {
       headers: { 'x-apikey': process.env.VIRUSTOTAL_API_KEY }
     });
