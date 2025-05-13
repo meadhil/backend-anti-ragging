@@ -23,104 +23,95 @@ app.use('/uploads', express.static('uploads'));
 
 const upload = multer({ dest: 'uploads/' });
 
-// ============ MongoDB Setup ============
+// ====================== MongoDB Setup ======================
 
 mongoose.connect(MONGO_URI, { useNewUrlParser: true, useUnifiedTopology: true })
   .then(() => console.log('✅ Connected to MongoDB'))
   .catch(err => console.error('❌ MongoDB connection failed:', err));
 
-// ============ Models ============
+// ====================== Models ======================
 
 const userSchema = new mongoose.Schema({
-  name: { type: String, required: true },
-  department: { type: String, required: true },
-  email: { type: String, required: true, unique: true },
-  password: { type: String, required: true },
+  name: String,
+  department: String,
+  email: { type: String, unique: true },
+  password: String,
   role: { type: String, enum: ['admin', 'user'], default: 'user' },
-});
+}, { toJSON: { virtuals: true } });
 
 userSchema.virtual('isAdmin').get(function () {
   return this.role === 'admin';
 });
 
-userSchema.set('toJSON', { virtuals: true });
-
 const User = mongoose.model('User', userSchema);
 
 const complaintSchema = new mongoose.Schema({
-  subject: { type: String, required: true },
-  description: { type: String, required: true },
-  date: { type: String },
-  location: { type: String },
-  witnesses: { type: String },
+  subject: String,
+  description: String,
+  date: String,
+  location: String,
+  witnesses: String,
   user_id: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
-  filePath: { type: String },
+  filePath: String,
 }, { timestamps: true });
 
 const Complaint = mongoose.model('Complaint', complaintSchema);
 
-// Create a model for the scan reports
 const scanReportSchema = new mongoose.Schema({
-  fileHash: { type: String, required: true, unique: true },
+  fileHash: { type: String, required: true },
   status: { type: String, enum: ['clean', 'malicious'], required: true },
-  vtLink: { type: String, required: true },
-  user_id: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }, // Optional if associated with a user
-  originalFilename: { type: String, required: true },
+  vtLink: String,
+  user_id: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  originalFilename: String,
 }, { timestamps: true });
+
+// Remove the unique index from fileHash or user_id combination
+// If you previously added a compound unique index, it will be removed now
+scanReportSchema.index({ fileHash: 1, user_id: 1 }, { unique: false });
 
 const ScanReport = mongoose.model('ScanReport', scanReportSchema);
 
-// ============ JWT Middleware ============
+
+// ====================== JWT Middleware ======================
 
 const authenticateToken = (req, res, next) => {
-  const authHeader = req.header('Authorization');
-  console.log('🔐 Incoming Auth Header:', authHeader);
+  const token = req.header('Authorization')?.split(' ')[1];
+  if (!token) return res.status(401).json({ message: 'Access denied. No token provided.' });
 
-  if (!authHeader?.startsWith('Bearer ')) {
-    return res.status(401).json({ message: 'Access denied. No token provided.' });
-  }
-
-  const token = authHeader.split(' ')[1];
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     req.user = decoded;
     next();
   } catch (err) {
-    return res.status(401).json({ message: err.name === 'TokenExpiredError' ? 'Token expired' : 'Invalid token' });
+    res.status(401).json({ message: err.name === 'TokenExpiredError' ? 'Token expired' : 'Invalid token' });
   }
 };
 
-// ============ Hashing and VirusTotal Functions ============
+// ====================== VirusTotal Logic ======================
 
 function calculateHash(filePath) {
-  const fileBuffer = fs.readFileSync(filePath);
-  return crypto.createHash('sha256').update(fileBuffer).digest('hex');
+  const buffer = fs.readFileSync(filePath);
+  return crypto.createHash('sha256').update(buffer).digest('hex');
 }
 
 async function queryVirusTotal(fileHash) {
-  const url = `https://www.virustotal.com/api/v3/files/${fileHash}`;
   try {
-    const response = await axios.get(url, { headers: { 'x-apikey': VT_API_KEY } });
-
-    // Check if the response is valid and contains the expected data
-    if (!response || !response.data) {
-      throw new Error('Invalid response from VirusTotal');
-    }
-
-    return response.data;  // Return the data if valid
+    const response = await axios.get(`https://www.virustotal.com/api/v3/files/${fileHash}`, {
+      headers: { 'x-apikey': VT_API_KEY },
+    });
+    return response.data;
   } catch (err) {
-    console.error('❌ Error querying VirusTotal:', err.message);
-    return null;  // Return null if the request fails or an error occurs
+    console.error('❌ VT query error:', err.message);
+    return null;
   }
 }
 
 async function uploadToVirusTotal(filePath) {
-  const url = `https://www.virustotal.com/api/v3/files`;
   const formData = new FormData();
   formData.append('file', fs.createReadStream(filePath));
 
   try {
-    const response = await axios.post(url, formData, {
+    const response = await axios.post(`https://www.virustotal.com/api/v3/files`, formData, {
       headers: {
         ...formData.getHeaders(),
         'x-apikey': VT_API_KEY,
@@ -128,25 +119,23 @@ async function uploadToVirusTotal(filePath) {
     });
     return response.data;
   } catch (err) {
-    console.error('❌ Error uploading to VirusTotal:', err.message);
-    return null;  // Return null if the upload fails
+    console.error('❌ VT upload error:', err.message);
+    return null;
   }
 }
 
-// ============ Auth Routes ============
+// ====================== Auth Routes ======================
 
 app.post('/api/auth/register', async (req, res) => {
   try {
     const { name, department, email, password } = req.body;
-    const existingUser = await User.findOne({ email });
-    if (existingUser) return res.status(400).json({ message: 'User already exists' });
+    if (await User.findOne({ email })) return res.status(400).json({ message: 'User already exists' });
 
     const hashedPassword = await bcrypt.hash(password, 10);
-    const newUser = new User({ name, department, email, password: hashedPassword });
-    await newUser.save();
+    const newUser = await new User({ name, department, email, password: hashedPassword }).save();
     res.status(201).json({ message: 'User registered successfully' });
-  } catch (error) {
-    res.status(500).json({ message: 'Server error' });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error during registration' });
   }
 });
 
@@ -160,23 +149,21 @@ app.post('/api/auth/login', async (req, res) => {
 
     const token = jwt.sign({ userId: user._id }, process.env.JWT_SECRET, { expiresIn: '1h' });
     res.json({
-  token,
-  user: {
-    id: user._id,
-    name: user.name,
-    email: user.email,
-    role: user.role,
-    isAdmin: user.role === 'admin'
+      token,
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        isAdmin: user.role === 'admin'
+      }
+    });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error during login' });
   }
 });
 
-  } catch (error) {
-    res.status(500).json({ message: 'Server error' });
-  }
-});
-
-// ============ Complaint Routes ============
-
+// ====================== Complaint Route ======================
 app.post('/api/complaints/submit', authenticateToken, upload.single('file'), async (req, res) => {
   try {
     const { subject, description, date, location, witnesses } = req.body;
@@ -186,130 +173,87 @@ app.post('/api/complaints/submit', authenticateToken, upload.single('file'), asy
     const filePath = file.path;
     const fileHash = calculateHash(filePath);
 
-    // Check if the file has been scanned already
-    const existingScanReport = await ScanReport.findOne({ fileHash });
-    if (existingScanReport) {
-      // If it exists, return the existing scan result
-      return res.json({
-        success: true,
-        message: 'File already scanned',
-        filename: file.originalname,
-        status: existingScanReport.status,
-        vtLink: existingScanReport.vtLink,
-      });
-    }
+    let scanReport = null;
+    let status, vtLink;
 
+    // Query VirusTotal for a scan report
     let result = await queryVirusTotal(fileHash);
 
-    // Handle case where queryVirusTotal returns null
     if (!result) {
       const uploadResult = await uploadToVirusTotal(filePath);
-      if (!uploadResult || !uploadResult.data || !uploadResult.data.id) {
+      if (!uploadResult?.data?.id) {
         fs.unlinkSync(filePath);
         return res.status(500).json({ message: 'VirusTotal upload failed' });
       }
       const scanId = uploadResult.data.id;
-      await new Promise(r => setTimeout(r, 15000));  // Wait for 15 seconds
+      await new Promise(r => setTimeout(r, 15000)); // Wait for scan
       result = await queryVirusTotal(scanId);
     }
 
-    // If result is still null, return an error
-    if (!result) {
-      return res.status(500).json({ message: 'Virus scan failed or no result found' });
-    }
+    if (!result) return res.status(500).json({ message: 'Virus scan failed' });
 
     const stats = result.data.attributes.last_analysis_stats;
-    const status = stats.malicious > 0 ? 'malicious' : 'clean';
-    const vtLink = `https://www.virustotal.com/gui/file/${fileHash}`;
+    status = stats.malicious > 0 ? 'malicious' : 'clean';
+    vtLink = `https://www.virustotal.com/gui/file/${fileHash}`;
 
-    // Save the scan report in the ScanReport collection
-    const scanReport = new ScanReport({
+    // Save scan report with user_id for tracking multiple entries for the same file
+    scanReport = await new ScanReport({
       fileHash,
       status,
       vtLink,
-      user_id: req.user.userId,  // Optional if linked to a user
-      originalFilename: file.originalname, // Store the filename
-    });
+      user_id: req.user.userId,  // Associate the report with the logged-in user
+      originalFilename: file.originalname
+    }).save();
 
-    await scanReport.save();
+    // Save complaint
+    const complaint = await new Complaint({
+      subject, description, date, location, witnesses,
+      user_id: req.user.userId, filePath,
+    }).save();
 
-    const newComplaint = new Complaint({
-      subject,
-      description,
-      date,
-      location,
-      witnesses,
-      user_id: req.user.userId,
-      filePath,
-    });
-    await newComplaint.save();
-
-    res.json({
-      success: true,
-      message: 'Complaint submitted successfully',
-      filename: file.originalname,
-      status,
-      vtLink,
-    });
+    res.json({ success: true, message: 'Complaint submitted', filename: file.originalname, status, vtLink });
   } catch (err) {
-    console.error('❌ Error:', err);
-    res.status(500).json({ message: 'Server error during complaint submission' });
+    console.error('❌ Submission error:', err);
+    res.status(500).json({ message: 'Error submitting complaint' });
   } finally {
-    if (req.file && fs.existsSync(req.file.path)) {
-      fs.unlinkSync(req.file.path);
-    }
+    if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
   }
 });
+
+
+// ====================== Admin Routes ======================
 
 app.get('/api/complaints/all', authenticateToken, async (req, res) => {
   try {
-    const complaints = await Complaint.find()
-      .populate({ path: 'user_id', select: 'name department' });
-
+    const complaints = await Complaint.find().populate('user_id', 'name department');
     const formatted = complaints.map(c => ({
-      _id: c._id,
-      subject: c.subject,
-      description: c.description,
-      date: c.date,
-      location: c.location,
-      witnesses: c.witnesses,
-      filePath: c.filePath,
-      name: c.user_id?.name || 'Unknown',
-      department: c.user_id?.department || 'Unknown',
-      createdAt: c.createdAt,
-      updatedAt: c.updatedAt,
+      _id: c._id, subject: c.subject, description: c.description, date: c.date,
+      location: c.location, witnesses: c.witnesses, filePath: c.filePath,
+      name: c.user_id?.name || 'Unknown', department: c.user_id?.department || 'Unknown',
+      createdAt: c.createdAt, updatedAt: c.updatedAt,
     }));
-
-    res.status(200).json(formatted);
-  } catch (error) {
+    res.json(formatted);
+  } catch (err) {
     res.status(500).json({ message: 'Error fetching complaints' });
   }
 });
-// ============ Scan Report Route ============
+
 app.get('/api/scans/all', authenticateToken, async (req, res) => {
   try {
-    const scans = await ScanReport.find().populate({ path: 'user_id', select: 'name department' });
-
+    const scans = await ScanReport.find().populate('user_id', 'name department');
     const formatted = scans.map(s => ({
-      _id: s._id,
-      originalFilename: s.originalFilename,
-      fileHash: s.fileHash,
-      status: s.status,
-      vtLink: s.vtLink,
-      name: s.user_id?.name || 'Unknown',
-      department: s.user_id?.department || 'Unknown',
-      createdAt: s.createdAt,
+      _id: s._id, originalFilename: s.originalFilename, fileHash: s.fileHash,
+      status: s.status, vtLink: s.vtLink,
+      name: s.user_id?.name || 'Unknown', department: s.user_id?.department || 'Unknown',
+      createdAt: s.createdAt
     }));
-
-    res.status(200).json(formatted);
-  } catch (error) {
+    res.json(formatted);
+  } catch (err) {
     res.status(500).json({ message: 'Error fetching scan reports' });
   }
 });
 
-
-
-// ============ Start Server ============
+// ====================== Start Server ======================
 
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
